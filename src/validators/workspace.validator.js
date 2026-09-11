@@ -1,0 +1,25 @@
+import * as yup from "yup";
+import { WORKSPACE_PROFILES } from "../constants/workspace.constants.js";
+
+const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export const createWorkspaceSchema = yup.object({
+  name: yup.string().trim().min(2).max(100).required(),
+  templateId: yup.string().required(),
+  profile: yup.string().oneOf(Object.keys(WORKSPACE_PROFILES)).default("small"),
+});
+
+export const updateWorkspaceSchema = yup.object({
+  name: yup.string().trim().min(2).max(100),
+});
+
+export const environmentVariableSchema = yup.object({
+  key: yup
+    .string()
+    .trim()
+    .matches(/^[A-Z_][A-Z0-9_]*$/, "key must be UPPER_SNAKE_CASE")
+    .required(),
+  value: yup.string().required(),
+});
+
+export const slugSchema = yup.string().matches(slugPattern);
