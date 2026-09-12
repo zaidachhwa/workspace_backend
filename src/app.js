@@ -8,6 +8,11 @@ import apiRoutes from "./routes/index.js";
 
 export const app = express();
 
+// One hop: browser -> nginx -> this backend (127.0.0.1). Without this, every
+// request looks like it comes from nginx's own IP, and rate limiting below
+// would apply globally across all users combined instead of per real client.
+app.set("trust proxy", 1);
+
 app.use(requestId);
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json());
