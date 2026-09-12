@@ -169,6 +169,28 @@ test("a member can remove themselves — leaving a shared workspace", async () =
   );
 });
 
+test("createWorkspace enforces the per-user quota, counting existing workspaces", async () => {
+  const quotaUser = await User.create({
+    name: "Quota Test",
+    email: `quota-${Date.now()}@test.local`,
+    workspaceQuota: 1,
+  });
+
+  const { workspace: first } = await workspaceService.createWorkspace(quotaUser.id, {
+    name: "quota-test-1",
+    templateId,
+    profile: "small",
+  });
+
+  await assert.rejects(
+    () =>
+      workspaceService.createWorkspace(quotaUser.id, { name: "quota-test-2", templateId, profile: "small" }),
+    (error) => error instanceof ApiError && error.statusCode === 403 && /quota/i.test(error.message)
+  );
+
+  await workspaceService.deleteWorkspace(quotaUser.id, first.id); // cleanup — real container/volume
+});
+
 test("deleteWorkspace removes the container, the volume, and the DB record", async () => {
   const workspace = await workspaceService.getOwnedWorkspace(workspaceId, ownerId);
   const { containerId, slug } = workspace;

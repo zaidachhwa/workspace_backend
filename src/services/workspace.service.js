@@ -66,6 +66,17 @@ export const createWorkspace = async (userId, { name, templateId, profile, gitRe
   const template = await WorkspaceTemplate.findById(templateId);
   if (!template) throw new ApiError(400, "Unknown workspace template");
 
+  // Counts only workspaces this user OWNS — being a collaborator elsewhere
+  // never eats into your own creation quota.
+  const user = await User.findById(userId);
+  const ownedCount = await Workspace.countDocuments({ user: userId });
+  if (ownedCount >= user.workspaceQuota) {
+    throw new ApiError(
+      403,
+      `Workspace quota reached (${ownedCount}/${user.workspaceQuota}). Delete one, or ask an admin to raise your limit.`
+    );
+  }
+
   const limits = WORKSPACE_PROFILES[profile];
   const slug = toSlug(name);
 

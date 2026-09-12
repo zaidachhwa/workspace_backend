@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { toJSONPlugin } from "./plugins/toJSON.plugin.js";
+import { USER_ROLE, USER_ROLES, DEFAULT_WORKSPACE_QUOTA } from "../constants/user.constants.js";
 
 const refreshTokenSchema = new mongoose.Schema(
   {
@@ -21,6 +22,11 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String, default: null },
     name: { type: String, required: true, trim: true },
     refreshTokens: { type: [refreshTokenSchema], default: [] },
+    role: { type: String, enum: USER_ROLES, default: USER_ROLE.USER },
+    // Only counts workspaces this user OWNS — being a collaborator on
+    // someone else's shared workspace never counts against your own quota.
+    workspaceQuota: { type: Number, default: DEFAULT_WORKSPACE_QUOTA },
+    disabled: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

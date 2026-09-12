@@ -31,4 +31,11 @@ export const env = {
   workspaceProxyPort: process.env.WORKSPACE_PROXY_PORT || "",
   // "http" locally (no cert), "https" in production (nginx terminates TLS in front of Traefik).
   workspaceProtocol: process.env.WORKSPACE_PROTOCOL || "http",
+  // Comma-separated. Any account with a matching email is auto-promoted to
+  // admin on login/register — no manual DB editing needed to bootstrap the
+  // first admin, and adding a second is a one-line env change.
+  adminEmails: (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
 };
