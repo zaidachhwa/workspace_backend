@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { Workspace } from "../models/Workspace.js";
 import { WorkspaceTemplate } from "../models/WorkspaceTemplate.js";
 import { WorkspaceEvent } from "../models/WorkspaceEvent.js";
+import { WorkspaceSnapshot } from "../models/WorkspaceSnapshot.js";
 import { ApiError } from "../utils/ApiError.js";
 import { encrypt, decrypt } from "../utils/encryption.js";
 import { env } from "../config/env.js";
@@ -17,7 +18,7 @@ const toSlug = (name) =>
 
 const generateAccessPassword = () => randomBytes(9).toString("base64url");
 
-const logEvent = (workspaceId, userId, eventType, metadata = {}) =>
+export const logEvent = (workspaceId, userId, eventType, metadata = {}) =>
   WorkspaceEvent.create({ workspace: workspaceId, user: userId, eventType, metadata });
 
 // Ownership check happens on every read/write. Returning 404 (not 403) for a
@@ -121,6 +122,13 @@ export const deleteWorkspace = async (userId, workspaceId) => {
   const workspace = await getOwnedWorkspace(workspaceId, userId);
   if (workspace.containerId) await dockerService.removeContainer(workspace.containerId);
   await dockerService.removeWorkspaceVolume(workspace.slug);
+
+  const snapshots = await WorkspaceSnapshot.find({ workspace: workspace.id });
+  for (const snapshot of snapshots) {
+    await dockerService.deleteSnapshotFile(workspace.slug, snapshot.filename).catch(() => {});
+  }
+  await WorkspaceSnapshot.deleteMany({ workspace: workspace.id });
+
   await workspace.deleteOne();
   await logEvent(workspaceId, userId, WORKSPACE_EVENT_TYPE.DELETED);
 };

@@ -26,4 +26,7 @@ export const WORKSPACE_EVENT_TYPE = {
   ENVIRONMENT_SET: "workspace.environment.set",
   ENVIRONMENT_REMOVED: "workspace.environment.removed",
   GIT_IMPORT: "workspace.git_import",
+  SNAPSHOT_CREATED: "workspace.snapshot.created",
+  SNAPSHOT_RESTORED: "workspace.snapshot.restored",
+  SNAPSHOT_DELETED: "workspace.snapshot.deleted",
 };

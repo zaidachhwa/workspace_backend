@@ -7,6 +7,7 @@ const CONTAINER_PORT = "8080/tcp";
 const CONTAINER_PROJECT_DIR = "/home/coder/project";
 const PIDS_LIMIT = 512;
 const PROXY_NETWORK = "cloudworkspace-proxy";
+const BACKUPS_VOLUME = "cloudworkspace-backups";
 
 const containerName = (slug) => `cw-workspace-${slug}`;
 const volumeName = (slug) => `cw-volume-${slug}`;
@@ -117,6 +118,83 @@ export const cloneRepository = async (containerId, repoUrl) => {
     throw new Error(message || `git clone exited with code ${ExitCode}`);
   }
 };
+
+// Shared across all workspaces — snapshots are namespaced by slug inside it,
+// separate from the workspace's own volume so deleting a workspace's volume
+// never touches its backups (and vice versa).
+const ensureBackupsVolume = () => docker.createVolume({ Name: BACKUPS_VOLUME });
+
+// Runs a short-lived Alpine container to do one filesystem operation, then
+// removes it. Used for snapshot create/restore/delete — operations that need
+// their own container (unlike cloneRepository, there's no running target
+// container to exec into when the workspace is stopped).
+const runOneOffContainer = async ({ cmd, binds }) => {
+  const container = await docker.createContainer({
+    Image: "alpine:latest",
+    Cmd: cmd,
+    Tty: false,
+    AttachStdout: true,
+    AttachStderr: true,
+    HostConfig: { Binds: binds, AutoRemove: false },
+  });
+
+  // Removal must happen no matter what fails below — a leftover container
+  // holds its volume mounts "in use", which then blocks deleting the
+  // workspace's volume later (hit exactly this while building the feature).
+  try {
+    // container.logs() has proven flaky here (occasionally resolves to
+    // something other than a Buffer) — attaching before start and reading the
+    // live stream, same pattern as cloneRepository's exec output, is reliable.
+    const stream = await container.attach({ stream: true, stdout: true, stderr: true });
+    await container.start();
+
+    const output = await new Promise((resolve) => {
+      const chunks = [];
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    });
+
+    const { StatusCode } = await container.wait();
+
+    // Docker multiplexes stdout/stderr with an 8-byte header per frame when
+    // Tty is false; strip the non-printable header bytes so output is readable.
+    const cleaned = output.replace(/[^\x20-\x7E\n]/g, "").trim();
+    if (StatusCode !== 0) throw new Error(cleaned || `command exited with code ${StatusCode}`);
+    return cleaned;
+  } finally {
+    await container.remove().catch(() => {});
+  }
+};
+
+// slug and filename are always server-generated (see toSlug/generateFilename)
+// and never taken directly from client input — safe to interpolate into shell
+// commands here without quoting/injection concerns.
+export const createSnapshot = async (slug, filename) => {
+  await ensureBackupsVolume();
+  const output = await runOneOffContainer({
+    cmd: [
+      "sh",
+      "-c",
+      `mkdir -p /backups/${slug} && tar czf /backups/${slug}/${filename} -C /data . && stat -c%s /backups/${slug}/${filename}`,
+    ],
+    binds: [`${volumeName(slug)}:/data:ro`, `${BACKUPS_VOLUME}:/backups`],
+  });
+  return Number(output.trim().split("\n").pop());
+};
+
+// Wipes the workspace volume's current contents before extracting — this is
+// a full restore, not a merge. Caller must ensure the workspace is stopped.
+export const restoreSnapshot = (slug, filename) =>
+  runOneOffContainer({
+    cmd: ["sh", "-c", `find /data -mindepth 1 -delete && tar xzf /backups/${slug}/${filename} -C /data`],
+    binds: [`${volumeName(slug)}:/data`, `${BACKUPS_VOLUME}:/backups:ro`],
+  });
+
+export const deleteSnapshotFile = (slug, filename) =>
+  runOneOffContainer({
+    cmd: ["sh", "-c", `rm -f /backups/${slug}/${filename}`],
+    binds: [`${BACKUPS_VOLUME}:/backups`],
+  });
 
 // Returns null if the container no longer exists (e.g. removed outside the platform).
 export const inspectContainer = async (containerId) => {
