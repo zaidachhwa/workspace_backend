@@ -124,13 +124,30 @@ export const cloneRepository = async (containerId, repoUrl) => {
 // never touches its backups (and vice versa).
 const ensureBackupsVolume = () => docker.createVolume({ Name: BACKUPS_VOLUME });
 
+const HELPER_IMAGE = "alpine:latest";
+let helperImagePulled = false;
+
+// A fresh Docker daemon (a new deployment, a new server) won't have this
+// image yet — createContainer fails outright rather than auto-pulling like
+// `docker run` does. Pull once per process lifetime; a no-op after that
+// since the image is already present.
+const ensureHelperImage = async () => {
+  if (helperImagePulled) return;
+  const stream = await docker.pull(HELPER_IMAGE);
+  await new Promise((resolve, reject) => {
+    docker.modem.followProgress(stream, (error) => (error ? reject(error) : resolve()));
+  });
+  helperImagePulled = true;
+};
+
 // Runs a short-lived Alpine container to do one filesystem operation, then
 // removes it. Used for snapshot create/restore/delete — operations that need
 // their own container (unlike cloneRepository, there's no running target
 // container to exec into when the workspace is stopped).
 const runOneOffContainer = async ({ cmd, binds }) => {
+  await ensureHelperImage();
   const container = await docker.createContainer({
-    Image: "alpine:latest",
+    Image: HELPER_IMAGE,
     Cmd: cmd,
     Tty: false,
     AttachStdout: true,
