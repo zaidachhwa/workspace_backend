@@ -4,7 +4,11 @@ import mongoose from "mongoose";
 
 const templates = [
   { name: "Node.js", image: "cloudworkspace/dev-node:latest", config: { runtime: "node" } },
-  { name: "Full Stack (Node + Mongo)", image: "cloudworkspace/dev-node:latest", config: { runtime: "node-mongo" } },
+  {
+    name: "Full Stack (Node + Mongo)",
+    image: "cloudworkspace/dev-fullstack:latest",
+    config: { runtime: "node-mongo", mongoUri: "mongodb://127.0.0.1:27017" },
+  },
 ];
 
 await connectDB();
