@@ -14,8 +14,12 @@ export const listWorkspaces = asyncHandler(async (req, res) => {
 
 export const createWorkspace = asyncHandler(async (req, res) => {
   const input = await createWorkspaceSchema.validate(req.body, { abortEarly: true, stripUnknown: true });
-  const workspace = await workspaceService.createWorkspace(req.user.id, input);
-  sendSuccess(res, { status: 201, message: "Workspace created", data: workspaceService.toWorkspaceResponse(workspace) });
+  const { workspace, gitImportError } = await workspaceService.createWorkspace(req.user.id, input);
+  sendSuccess(res, {
+    status: 201,
+    message: "Workspace created",
+    data: { ...workspaceService.toWorkspaceResponse(workspace), gitImportError },
+  });
 });
 
 export const getWorkspace = asyncHandler(async (req, res) => {

@@ -48,7 +48,7 @@ export const toWorkspaceResponse = (workspace) => {
 
 export const listWorkspaces = (userId) => Workspace.find({ user: userId }).sort({ createdAt: -1 });
 
-export const createWorkspace = async (userId, { name, templateId, profile }) => {
+export const createWorkspace = async (userId, { name, templateId, profile, gitRepoUrl }) => {
   const template = await WorkspaceTemplate.findById(templateId);
   if (!template) throw new ApiError(400, "Unknown workspace template");
 
@@ -81,15 +81,32 @@ export const createWorkspace = async (userId, { name, templateId, profile }) => 
     workspace.status = WORKSPACE_STATUS.RUNNING;
     workspace.lastStartedAt = new Date();
     await workspace.save();
+
+    let gitImportError = null;
+    if (gitRepoUrl) {
+      // Best-effort: a bad URL or private repo shouldn't fail workspace
+      // creation — the user still gets a working workspace and can clone manually.
+      try {
+        await dockerService.cloneRepository(containerId, gitRepoUrl);
+        await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.GIT_IMPORT, { repoUrl: gitRepoUrl, success: true });
+      } catch (error) {
+        gitImportError = error.message;
+        await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.GIT_IMPORT, {
+          repoUrl: gitRepoUrl,
+          success: false,
+          error: error.message,
+        });
+      }
+    }
+
+    await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.CREATED, { templateId, profile });
+    return { workspace, gitImportError };
   } catch (error) {
     workspace.status = WORKSPACE_STATUS.ERROR;
     await workspace.save();
     await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.CREATED, { templateId, profile, error: error.message });
     throw new ApiError(502, "Failed to provision workspace container");
   }
-
-  await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.CREATED, { templateId, profile });
-  return workspace;
 };
 
 export const updateWorkspace = async (userId, workspaceId, updates) => {

@@ -7,6 +7,12 @@ export const createWorkspaceSchema = yup.object({
   name: yup.string().trim().min(2).max(100).required(),
   templateId: yup.string().required(),
   profile: yup.string().oneOf(Object.keys(WORKSPACE_PROFILES)).default("small"),
+  // Public repos only for now — HTTPS avoids needing to manage SSH keys/credentials.
+  gitRepoUrl: yup
+    .string()
+    .trim()
+    .matches(/^https:\/\/.+/, { message: "must be a public https:// repository URL", excludeEmptyString: true })
+    .optional(),
 });
 
 export const updateWorkspaceSchema = yup.object({

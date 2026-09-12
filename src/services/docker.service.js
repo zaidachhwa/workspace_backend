@@ -84,6 +84,40 @@ export const removeContainer = async (containerId) => {
   }
 };
 
+const CLONE_TIMEOUT_MS = 60_000;
+
+// Runs `git clone` inside the already-running container via `docker exec`,
+// straight into the project volume. HTTPS only — no SSH keys to manage, so
+// this is scoped to public repositories for now (private-repo import is a
+// later feature per the spec's guidance on not storing broad credentials).
+export const cloneRepository = async (containerId, repoUrl) => {
+  const container = docker.getContainer(containerId);
+  const exec = await container.exec({
+    Cmd: ["git", "clone", "--", repoUrl, "."],
+    WorkingDir: CONTAINER_PROJECT_DIR,
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+
+  const stream = await exec.start({});
+  const output = await Promise.race([
+    new Promise((resolve) => {
+      const chunks = [];
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("git clone timed out")), CLONE_TIMEOUT_MS)),
+  ]);
+
+  const { ExitCode } = await exec.inspect();
+  if (ExitCode !== 0) {
+    // Docker multiplexes stdout/stderr with an 8-byte header per frame; strip
+    // non-printable header bytes so the error message is actually readable.
+    const message = output.replace(/[^\x20-\x7E\n]/g, "").trim();
+    throw new Error(message || `git clone exited with code ${ExitCode}`);
+  }
+};
+
 // Returns null if the container no longer exists (e.g. removed outside the platform).
 export const inspectContainer = async (containerId) => {
   try {

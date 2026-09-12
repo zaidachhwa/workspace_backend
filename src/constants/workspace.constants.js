@@ -25,4 +25,5 @@ export const WORKSPACE_EVENT_TYPE = {
   DELETED: "workspace.deleted",
   ENVIRONMENT_SET: "workspace.environment.set",
   ENVIRONMENT_REMOVED: "workspace.environment.removed",
+  GIT_IMPORT: "workspace.git_import",
 };
