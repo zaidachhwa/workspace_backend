@@ -27,4 +27,8 @@ router.post("/:id/snapshots", snapshotController.createSnapshot);
 router.post("/:id/snapshots/:snapshotId/restore", snapshotController.restoreSnapshot);
 router.delete("/:id/snapshots/:snapshotId", snapshotController.deleteSnapshot);
 
+router.get("/:id/members", workspaceController.listMembers);
+router.post("/:id/members", workspaceController.addMember);
+router.delete("/:id/members/:memberId", workspaceController.removeMember);
+
 export default router;

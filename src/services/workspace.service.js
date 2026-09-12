@@ -3,6 +3,7 @@ import { Workspace } from "../models/Workspace.js";
 import { WorkspaceTemplate } from "../models/WorkspaceTemplate.js";
 import { WorkspaceEvent } from "../models/WorkspaceEvent.js";
 import { WorkspaceSnapshot } from "../models/WorkspaceSnapshot.js";
+import { User } from "../models/User.js";
 import { ApiError } from "../utils/ApiError.js";
 import { encrypt, decrypt } from "../utils/encryption.js";
 import { env } from "../config/env.js";
@@ -21,23 +22,34 @@ const generateAccessPassword = () => randomBytes(9).toString("base64url");
 export const logEvent = (workspaceId, userId, eventType, metadata = {}) =>
   WorkspaceEvent.create({ workspace: workspaceId, user: userId, eventType, metadata });
 
-// Ownership check happens on every read/write. Returning 404 (not 403) for a
-// workspace owned by someone else avoids leaking that the ID exists.
+// Owner-only actions (delete, invite/remove members) check this. Returning
+// 404 (not 403) for a workspace owned by someone else avoids leaking that
+// the ID exists.
 export const getOwnedWorkspace = async (workspaceId, userId) => {
   const workspace = await Workspace.findOne({ _id: workspaceId, user: userId });
   if (!workspace) throw new ApiError(404, "Workspace not found");
   return workspace;
 };
 
+// Everything else (start/stop/env vars/snapshots/git import/rename) checks
+// this instead — owner OR a collaborator. Tier 1 sharing: one shared
+// container/environment, not per-person isolation (see docs/architecture.md).
+export const getAccessibleWorkspace = async (workspaceId, userId) => {
+  const workspace = await Workspace.findOne({ _id: workspaceId, $or: [{ user: userId }, { members: userId }] });
+  if (!workspace) throw new ApiError(404, "Workspace not found");
+  return workspace;
+};
+
 // The container access password is a platform-managed credential (not user
 // secret material), so — unlike custom environment values — it's fine to
-// decrypt it back for the owner so they can actually log into their IDE.
-export const toWorkspaceResponse = (workspace) => {
+// decrypt it back for anyone with access, so they can actually log into the IDE.
+export const toWorkspaceResponse = (workspace, userId) => {
   const json = workspace.toJSON();
   const isRunning = workspace.status === WORKSPACE_STATUS.RUNNING;
   const port = env.workspaceProxyPort ? `:${env.workspaceProxyPort}` : "";
   return {
     ...json,
+    isOwner: String(workspace.user) === String(userId),
     accessUrl:
       isRunning && workspace.accessDomain
         ? `${env.workspaceProtocol}://${workspace.accessDomain}${port}`
@@ -47,7 +59,8 @@ export const toWorkspaceResponse = (workspace) => {
   };
 };
 
-export const listWorkspaces = (userId) => Workspace.find({ user: userId }).sort({ createdAt: -1 });
+export const listWorkspaces = (userId) =>
+  Workspace.find({ $or: [{ user: userId }, { members: userId }] }).sort({ createdAt: -1 });
 
 export const createWorkspace = async (userId, { name, templateId, profile, gitRepoUrl }) => {
   const template = await WorkspaceTemplate.findById(templateId);
@@ -111,7 +124,7 @@ export const createWorkspace = async (userId, { name, templateId, profile, gitRe
 };
 
 export const updateWorkspace = async (userId, workspaceId, updates) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   Object.assign(workspace, updates);
   await workspace.save();
   await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.UPDATED, updates);
@@ -137,7 +150,7 @@ export const deleteWorkspace = async (userId, workspaceId) => {
 // host cleanup), START recreates it against the same persistent volume —
 // matches the spec's RECOVER lifecycle.
 export const startWorkspace = async (userId, workspaceId) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   const template = await WorkspaceTemplate.findById(workspace.template);
 
   const existing = workspace.containerId ? await dockerService.inspectContainer(workspace.containerId) : null;
@@ -167,7 +180,7 @@ export const startWorkspace = async (userId, workspaceId) => {
 };
 
 export const stopWorkspace = async (userId, workspaceId) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   if (workspace.containerId) await dockerService.stopContainer(workspace.containerId);
   workspace.status = WORKSPACE_STATUS.STOPPED;
   await workspace.save();
@@ -176,7 +189,7 @@ export const stopWorkspace = async (userId, workspaceId) => {
 };
 
 export const restartWorkspace = async (userId, workspaceId) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   if (!workspace.containerId) throw new ApiError(409, "Workspace has no container to restart — start it first");
 
   await dockerService.restartContainer(workspace.containerId);
@@ -191,7 +204,7 @@ export const restartWorkspace = async (userId, workspaceId) => {
 // unhealthy/dead container). Called from the status endpoint rather than
 // every read, to avoid a Docker round-trip on every workspace list/fetch.
 export const syncWorkspaceStatus = async (userId, workspaceId) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   if (!workspace.containerId) return workspace;
 
   const info = await dockerService.inspectContainer(workspace.containerId);
@@ -208,19 +221,19 @@ export const syncWorkspaceStatus = async (userId, workspaceId) => {
 };
 
 export const listWorkspaceEvents = async (userId, workspaceId) => {
-  await getOwnedWorkspace(workspaceId, userId);
+  await getAccessibleWorkspace(workspaceId, userId);
   return WorkspaceEvent.find({ workspace: workspaceId }).sort({ createdAt: -1 }).limit(200);
 };
 
 // Environment values are returned as keys only; the encrypted value never
 // round-trips back to a client except through this deliberate helper.
 export const listEnvironmentKeys = async (userId, workspaceId) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   return workspace.environment.map((entry) => entry.key);
 };
 
 export const setEnvironmentVariable = async (userId, workspaceId, key, value) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   const encryptedValue = encrypt(value);
   const existing = workspace.environment.find((entry) => entry.key === key);
   if (existing) {
@@ -234,7 +247,7 @@ export const setEnvironmentVariable = async (userId, workspaceId, key, value) =>
 };
 
 export const removeEnvironmentVariable = async (userId, workspaceId, key) => {
-  const workspace = await getOwnedWorkspace(workspaceId, userId);
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
   workspace.environment = workspace.environment.filter((entry) => entry.key !== key);
   await workspace.save();
   await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.ENVIRONMENT_REMOVED, { key });
@@ -245,4 +258,51 @@ export const resolveDecryptedEnvironment = async (workspaceId) => {
   const workspace = await Workspace.findById(workspaceId);
   if (!workspace) throw new ApiError(404, "Workspace not found");
   return Object.fromEntries(workspace.environment.map((entry) => [entry.key, decrypt(entry.encryptedValue)]));
+};
+
+// --- Members (Tier 1 sharing) ---
+
+export const listMembers = async (userId, workspaceId) => {
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
+  const owner = await User.findById(workspace.user);
+  const members = await User.find({ _id: { $in: workspace.members } });
+  return { owner, members };
+};
+
+export const addMember = async (userId, workspaceId, email) => {
+  // Accessible-then-ownership-check (rather than a blunt getOwnedWorkspace)
+  // so an existing member trying to invite someone gets a clear 403 ("you
+  // don't have permission"), not a confusing 404 for a workspace they can
+  // otherwise see and use fine. A total stranger still gets 404.
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
+  if (String(workspace.user) !== String(userId)) {
+    throw new ApiError(403, "Only the owner can invite members");
+  }
+
+  const invitee = await User.findOne({ email });
+  if (!invitee) throw new ApiError(404, "No account found with that email — they need to register first");
+  if (String(invitee.id) === String(workspace.user)) {
+    throw new ApiError(400, "That's already the workspace owner");
+  }
+  if (workspace.members.some((memberId) => String(memberId) === String(invitee.id))) {
+    throw new ApiError(409, "That person already has access");
+  }
+
+  workspace.members.push(invitee.id);
+  await workspace.save();
+  await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.MEMBER_ADDED, { email });
+  return invitee;
+};
+
+// The owner can remove anyone; a member can remove themselves (leave).
+export const removeMember = async (userId, workspaceId, memberIdToRemove) => {
+  const workspace = await getAccessibleWorkspace(workspaceId, userId);
+  const isOwner = String(workspace.user) === String(userId);
+  if (!isOwner && String(userId) !== String(memberIdToRemove)) {
+    throw new ApiError(403, "Only the owner can remove other members");
+  }
+
+  workspace.members = workspace.members.filter((memberId) => String(memberId) !== String(memberIdToRemove));
+  await workspace.save();
+  await logEvent(workspace.id, userId, WORKSPACE_EVENT_TYPE.MEMBER_REMOVED, { memberId: memberIdToRemove });
 };

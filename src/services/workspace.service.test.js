@@ -21,6 +21,8 @@ const { WORKSPACE_STATUS } = await import("../constants/workspace.constants.js")
 
 let ownerId;
 let otherUserId;
+let memberId;
+let memberEmail;
 let templateId;
 let workspaceId;
 
@@ -28,12 +30,15 @@ before(async () => {
   await mongoose.connect(process.env.MONGO_URI);
   const owner = await User.create({ name: "Test Owner", email: `owner-${Date.now()}@test.local` });
   const otherUser = await User.create({ name: "Other User", email: `other-${Date.now()}@test.local` });
+  memberEmail = `member-${Date.now()}@test.local`;
+  const member = await User.create({ name: "Test Member", email: memberEmail });
   const template = await WorkspaceTemplate.create({
     name: `test-template-${Date.now()}`,
     image: "cloudworkspace/dev-node:latest",
   });
   ownerId = owner.id;
   otherUserId = otherUser.id;
+  memberId = member.id;
   templateId = template.id;
 });
 
@@ -94,6 +99,72 @@ test("startWorkspace starts the same container again", async () => {
 test("restartWorkspace by another user is denied, not just ignored", async () => {
   await assert.rejects(
     () => workspaceService.restartWorkspace(otherUserId, workspaceId),
+    (error) => error instanceof ApiError && error.statusCode === 404
+  );
+});
+
+test("a non-member is denied — sharing hasn't happened yet", async () => {
+  await assert.rejects(
+    () => workspaceService.getAccessibleWorkspace(workspaceId, memberId),
+    (error) => error instanceof ApiError && error.statusCode === 404
+  );
+});
+
+test("a total stranger inviting a member gets 404, not 403 — doesn't leak the workspace's existence", async () => {
+  await assert.rejects(
+    () => workspaceService.addMember(otherUserId, workspaceId, "someone@test.local"),
+    (error) => error instanceof ApiError && error.statusCode === 404
+  );
+});
+
+test("owner adds a member, and that member gains real access", async () => {
+  await workspaceService.addMember(ownerId, workspaceId, memberEmail);
+
+  const workspace = await workspaceService.getAccessibleWorkspace(workspaceId, memberId);
+  assert.equal(workspace.id, workspaceId);
+
+  // Membership grants operational access (start/stop), not just read access.
+  const stopped = await workspaceService.stopWorkspace(memberId, workspaceId);
+  assert.equal(stopped.status, WORKSPACE_STATUS.STOPPED);
+  await workspaceService.startWorkspace(ownerId, workspaceId); // leave it running for later tests
+});
+
+test("listWorkspaces includes workspaces the user is a member of, not just owned ones", async () => {
+  const memberWorkspaces = await workspaceService.listWorkspaces(memberId);
+  assert.ok(memberWorkspaces.some((w) => String(w.id) === String(workspaceId)));
+});
+
+test("toWorkspaceResponse reports isOwner correctly for owner vs. member", async () => {
+  const workspace = await workspaceService.getAccessibleWorkspace(workspaceId, memberId);
+  assert.equal(workspaceService.toWorkspaceResponse(workspace, ownerId).isOwner, true);
+  assert.equal(workspaceService.toWorkspaceResponse(workspace, memberId).isOwner, false);
+});
+
+test("a member (not a stranger) inviting someone gets 403 — they have access, just not this permission", async () => {
+  await assert.rejects(
+    () => workspaceService.addMember(memberId, workspaceId, "someone-else@test.local"),
+    (error) => error instanceof ApiError && error.statusCode === 403
+  );
+});
+
+test("a member cannot delete the workspace — owner-only", async () => {
+  await assert.rejects(
+    () => workspaceService.deleteWorkspace(memberId, workspaceId),
+    (error) => error instanceof ApiError && error.statusCode === 404
+  );
+});
+
+test("a member cannot remove a different member — only themselves", async () => {
+  await assert.rejects(
+    () => workspaceService.removeMember(memberId, workspaceId, ownerId),
+    (error) => error instanceof ApiError && error.statusCode === 403
+  );
+});
+
+test("a member can remove themselves — leaving a shared workspace", async () => {
+  await workspaceService.removeMember(memberId, workspaceId, memberId);
+  await assert.rejects(
+    () => workspaceService.getAccessibleWorkspace(workspaceId, memberId),
     (error) => error instanceof ApiError && error.statusCode === 404
   );
 });

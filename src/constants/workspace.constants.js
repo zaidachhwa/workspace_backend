@@ -29,4 +29,6 @@ export const WORKSPACE_EVENT_TYPE = {
   SNAPSHOT_CREATED: "workspace.snapshot.created",
   SNAPSHOT_RESTORED: "workspace.snapshot.restored",
   SNAPSHOT_DELETED: "workspace.snapshot.deleted",
+  MEMBER_ADDED: "workspace.member.added",
+  MEMBER_REMOVED: "workspace.member.removed",
 };

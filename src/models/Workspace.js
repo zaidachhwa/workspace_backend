@@ -14,6 +14,10 @@ const environmentVariableSchema = new mongoose.Schema(
 const workspaceSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    // Collaborators (Tier 1: shared access, not per-person isolation — everyone
+    // with access uses the same container/environment). Owner-only actions
+    // (delete, invite/remove) check `user`; everything else checks membership.
+    members: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [], index: true },
     name: { type: String, required: true, trim: true },
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
     status: { type: String, enum: WORKSPACE_STATUSES, default: WORKSPACE_STATUS.CREATING },

@@ -29,3 +29,7 @@ export const environmentVariableSchema = yup.object({
 });
 
 export const slugSchema = yup.string().matches(slugPattern);
+
+export const addMemberSchema = yup.object({
+  email: yup.string().trim().email().required(),
+});
